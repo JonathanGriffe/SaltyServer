@@ -2,6 +2,7 @@ from django.db import models
 
 # Create your models here.
 
+#Table representing characters, their wins, losses and average share of total bet amount [0,1]
 class Champion(models.Model):
     name = models.CharField(max_length=50)
     wins = models.IntegerField()
@@ -11,6 +12,7 @@ class Champion(models.Model):
     def __str__(self):
         return '{"name":"'+str(self.name)+'", "wins":'+str(self.wins)+', "losses":'+str(self.losses)+', "avgBetShare":'+str(self.avgBetShare)+'}'
 
+#Represents matches between 2 characters, and the share of bets on red [0,1]
 class Matchup(models.Model):
     name1 = models.ForeignKey(Champion, on_delete=models.CASCADE, related_name ='name1', null=True)
     name2 = models.ForeignKey(Champion, on_delete=models.CASCADE, related_name = 'name2', null=True)
@@ -32,6 +34,7 @@ def NScore(name):
         NScore = 0.5*(1 - CScore) + (champ.wins/(champ.wins+champ.losses)) * CScore
     return NScore
 
+#Represents matches played
 class Match(models.Model):
     time = models.DateTimeField(auto_now_add = True, null=True)
     winner = models.ForeignKey(Champion, on_delete=models.CASCADE, related_name = 'red', null=True)
@@ -40,6 +43,7 @@ class Match(models.Model):
     winnerTotalBets = models.IntegerField()
     looserTotalBets = models.IntegerField()
 
+#Represents current status
 class Status(models.Model):
     time = models.DateTimeField(auto_now = True, null=True)
     status = models.CharField(max_length=10)

@@ -10,12 +10,13 @@ import math
 import time
 import os
 
-url_status = "https://www.saltybet.com/state.json"
-url_sid = "https://www.saltybet.com:2096/socket.io/?EIO=3&transport=polling"
-url_ws = "wss://www.saltybet.com:2096/socket.io/?EIO=3&transport=websocket&sid="
-url_balance = "https://www.saltybet.com/zdata.json"
+url_status = "https://www.saltybet.com/state.json" #url to get status
+url_sid = "https://www.saltybet.com:2096/socket.io/?EIO=3&transport=polling"#url to get sid
+url_ws = "wss://www.saltybet.com:2096/socket.io/?EIO=3&transport=websocket&sid="#url to open websocket
+url_balance = "https://www.saltybet.com/zdata.json"#url to get balance
 PHPSESSID   = os.environ['SB_PHPSESSID']
 
+#send new status to clients
 def broadcast_status(status):
     channel_layer = channels.layers.get_channel_layer()
     async_to_sync(channel_layer.group_send)(
@@ -24,6 +25,7 @@ def broadcast_status(status):
             "content": str(status),
         })
 
+#if message signals new status, trigger signal ws
 def on_message(ws, message):
     print(message)
     if(message == '42["message"]'):
@@ -41,13 +43,14 @@ def on_close(ws):
     print('Attempting restart')
     runWS()
 
+
 def on_open(ws):
-    def run(*args):
+    def run(*args):#initialize connection by sending "2probe" and "5"
         ws.send("2probe")
         time.sleep(1)
         ws.send("5")
         print("WS Online")
-        while 1:
+        while 1:#keep connection alive by sending "2" periodically
             time.sleep(25)
             ws.send("2")
         time.sleep(1)
@@ -55,8 +58,9 @@ def on_open(ws):
     t= Thread(target=run)
     t.start()
 
+#initialize websocket
 def runWS(signal):
-    r = requests.get(url_sid)
+    r = requests.get(url_sid)#get sid to identify to server
     sid = r.text.split('"')[3]
     ws = websocket.WebSocketApp(url_ws+sid,
                             on_message = on_message,
@@ -66,6 +70,7 @@ def runWS(signal):
     ws.on_open = on_open
     ws.run_forever()
 
+#returns player to bet on, depending on NScores
 def betNScore(redNScore, blueNScore):
     if(redNScore > blueNScore + 0.1):
         return "player1"
@@ -75,6 +80,7 @@ def betNScore(redNScore, blueNScore):
 
 models = None
 
+#gets data from database and computes NScore of character with name "name"
 def NScore(name, models):
     try:
         champ = models.Champion.objects.get(name=name)
@@ -86,18 +92,25 @@ def NScore(name, models):
         NScore = 0.5*(1 - CScore) + (champ.wins/(champ.wins+champ.losses)) * CScore
     return NScore
  
+#function run everytime status changes
 def updateStatus(**kwargs):
     global models
     if(models == None):
         print("not loaded")
         return
     print("updating")
+
+    #gets new data
     CS = models.Status.objects.first()
     r = requests.get(url_status)
     S = json.loads(r.text)
     status = S["status"]
+
+    #if status indeed changed, process new data
     if(status != CS.status):
         CS.status = status
+
+        #red won
         if(status == "1"):
             CS.red = S["p1name"]
             CS.blue = S["p2name"]
@@ -109,6 +122,8 @@ def updateStatus(**kwargs):
             CS.avgDiff = (CS.avgDiff * CS.n + abs(scoreDiff))/(CS.n +1)
             CS.covariance = (CS.n * CS.covariance + scoreDiff)/(CS.n+1)
             CS.n += 1
+
+        #blue won
         if(status == "2"):
             CS.red = S["p1name"]
             CS.blue = S["p2name"]
@@ -120,6 +135,8 @@ def updateStatus(**kwargs):
             CS.avgDiff = (CS.avgDiff * CS.n + abs(scoreDiff))/(CS.n + 1)
             CS.covariance = (CS.n * CS.covariance - scoreDiff)/(CS.n + 1)
             CS.n += 1
+
+        #bets are open
         if(status == 'open'):
             CS.red = S["p1name"]
             CS.blue = S["p2name"]
@@ -135,6 +152,8 @@ def updateStatus(**kwargs):
             amount = math.floor(max(min(max(325, CS.balance/2),10000), CS.balance/10))
             if(winner != ""):
                 r = requests.post("https://www.saltybet.com/ajax_place_bet.php", data={'selectedplayer':winner, 'wager':str(amount)}, cookies=cookies)
+        
+        #bets are locked
         if(status == 'locked'):
             print("Bets locked !")
             CS.red = S["p1name"]
@@ -142,6 +161,7 @@ def updateStatus(**kwargs):
             red, created = models.Champion.objects.get_or_create(name=CS.red, defaults={'wins': 0, 'losses': 0, 'avgBetShare' : 0})
             blue, created = models.Champion.objects.get_or_create(name=CS.blue, defaults={'wins': 0, 'losses': 0, 'avgBetShare' : 0})
 
+        #send new status to clients, and save new status to database
         broadcast_status(CS)
         CS.save()
     else:
@@ -149,9 +169,11 @@ def updateStatus(**kwargs):
 
 
 
-
+#writes new results into database
 def writeResult(winnerName, looserName, betWinner, betLooser, scoreDiff):
     print("write")
+
+    #create character into database, or get data if it already exists
     winner, created = models.Champion.objects.get_or_create(name=winnerName, defaults={'wins': 1, 'losses': 0, 'avgBetShare' : betWinner/(betWinner+betLooser)})
     if not created:
         winner.avgBetShare = (winner.avgBetShare*(winner.wins + winner.losses) + betWinner/(betWinner+betLooser))/(winner.wins+winner.losses+1)
@@ -162,7 +184,8 @@ def writeResult(winnerName, looserName, betWinner, betLooser, scoreDiff):
         looser.avgBetShare = (looser.avgBetShare*(looser.wins + looser.losses) + betLooser/(betWinner+betLooser))/(looser.wins+looser.losses+1)
         looser.losses += 1
         winner.save()
-    try:
+
+    try:#try to get Matchup to change it, create it if it doesn't exist
         match = models.Matchup.objects.get(name1=winner, name2=looser)
         match.betShare1 = (match.betShare1*(match.wins1 + match.wins2) + betWinner/(betWinner+betLooser))/(match.wins1+match.wins2+1)
         match.wins1 += 1
@@ -179,7 +202,7 @@ def writeResult(winnerName, looserName, betWinner, betLooser, scoreDiff):
     print("written")
     
 signal = dispatch.Signal()
-signal.connect(updateStatus)
+signal.connect(updateStatus) #update the data everytime the signal is triggered
 
 class BoardConfig(AppConfig):
     name = 'board'

@@ -10,24 +10,28 @@ class StatusSyncConsumer(SyncConsumer):
             'type': 'websocket.accept'
         })
 
+        #when client connects, send him status
         self.send({
             'type': 'websocket.send',
             'text': str(models.Status.objects.first())
         })
-        # Join ticks group
+        # Join client group
         async_to_sync(self.channel_layer.group_add)(
             "status",
             self.channel_name
         )
 
     def websocket_disconnect(self, event):
-        # Leave ticks group
+        # Leave client group
+        await self.send({
+            "type": "websocket.close"
+        })
         async_to_sync(self.channel_layer.group_discard)(
             "status",
             self.channel_name
         )
 
-    def new_status(self, event):
+    def new_status(self, event):#when new_status triggered, send the new status to websocket clients
         self.send({
             'type': 'websocket.send',
             'text': event['content'],
